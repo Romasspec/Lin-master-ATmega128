@@ -424,7 +424,7 @@ SRAM_clr1:
 
 ;	ldi		XL,				low (RXbufUS1)
 ;	ldi		XH,				high(RXbufUS1)
-;	ldi		temp0,			9
+;	ldi		temp0,			9	;9
 ;	
 ;	add		XL,				temp0
 ;	adc		XH,				zero
