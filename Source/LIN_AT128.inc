@@ -1,3 +1,5 @@
+;#define		master_lin
+#define		slave_lin
 
 .def zero			= r0
 .def i_sreg			= r1
@@ -31,7 +33,8 @@
 .equ USART0_BAUD	= 115200
 .equ USART1_BAUD	= 9600
 .equ RXbufUS1_size	= 20
-.equ Time_out_time	= 213
+.equ Time_out_time	= 213			; мс
+.equ Synk_time		= 1200			; мс
 
 
 .equ I_CH			= 0

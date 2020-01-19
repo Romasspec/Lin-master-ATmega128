@@ -3,6 +3,8 @@
 
 .dseg
 .org		SRAM_START
+#ifdef  master_lin
+
 flags1:			.byte 1
 	.equ		RXB0 					= 0
 	.equ		RXB1 					= 1
@@ -16,6 +18,17 @@ TXbufUS1_pos:	.byte 1
 Tout_timer_l:	.byte 1
 Tout_timer_h:	.byte 1
 
+#elif	slave_lin
+flags1:			.byte 1
+	.equ		Sync_break_rx_ok 		= 0
+	.equ		falling_edge			= 1			; 1 - falling edge, 0 - rising edge
+
+TCNT0_h:		.byte 1
+Synk_stime_l:	.byte 1
+Synk_stime_h:	.byte 1
+
+#endif
+
 .cseg
 .org		0x00
 			rjmp	RESET     ; Reset Handler			$0002
@@ -24,7 +37,13 @@ Tout_timer_h:	.byte 1
 .org		0x04
 	reti	;jmp	EXT_INT1  ; IRQ1 Handler			$0006
 .org		0x06
+
+#ifdef  master_lin
 	reti	;jmp	EXT_INT2  ; IRQ2 Handler			$0008
+#elif	slave_lin
+	rjmp	EXT_INT2
+#endif
+
 .org		0x08
 	reti	;jmp	EXT_INT3  ; IRQ3 Handler			$000A
 .org		0x0A
@@ -89,9 +108,9 @@ Tout_timer_h:	.byte 1
 	reti	;jmp	SPM_RDY   ; SPM Ready Handler
 .org		0x46
 
-
+#ifdef master_lin
 ;*********************************************************************
-;********* Подпрограммы обработки прерываний *******
+;********* Подпрограммы обработки прерываний MASTER *******
 ;*********************************************************************
 TIM0_OVF:
 	in		i_sreg,			SREG
@@ -185,6 +204,85 @@ USART1_RXC_1:
 	out		SREG,			i_sreg
 	reti
 
+
+;*********************************************************************
+;********* Подпрограммы обработки прерываний SLAVE *******
+;*********************************************************************
+#elif	slave_lin
+
+TIM0_OVF:
+	in		i_sreg,			SREG
+	push	temp0
+
+	lds		temp0,			TCNT0_h
+	inc		temp0
+	sts		TCNT0_h,		temp0
+
+	pop		temp0
+	out		SREG,			i_sreg
+	reti
+
+USART0_RXC:
+
+	reti
+
+USART1_RXC:
+
+	reti
+
+EXT_INT2:
+	in		i_sreg,			SREG
+	push	temp0
+	push	temp1
+	push	temp2
+	push	temp3
+	push	temp4
+
+	in		temp1,			TCNT0
+	lds		temp2,			TCNT0_h
+	lds		temp0,			flags1
+	sbrc	temp0,			falling_edge
+	rjmp	EXT_INT2_rising_edge
+	sbr		temp0,			(1<<falling_edge)
+	sts		Synk_stime_l,	temp1
+	sts		Synk_stime_h,	temp2
+	lds		temp1,			EICRA
+	sbr		temp1,			(1<<ISC20)						; rising edge нарастающий фронт
+	sts		EICRA,			temp1
+	rjmp	EXT_INT2_out
+
+EXT_INT2_rising_edge:
+	cbr		temp0,			(1<<falling_edge)
+	lds		temp3,			Synk_stime_l
+	lds		temp4,			Synk_stime_h
+	sub		temp1,			temp3
+	sbc		temp2,			temp4
+
+	cpi		temp1,			low (Synk_time)
+	ldi		temp3,			high(Synk_time)
+	cpc		temp2,			temp3
+	brlo	EXT_INT2_out1
+	sbr		temp0,			(1<<Sync_break_rx_ok)
+	in		temp1,			EIMSK
+	cbr		temp1,			(1<<INT2)
+	out		EIMSK,			temp1
+EXT_INT2_out1:
+	lds		temp1,			EICRA
+	cbr		temp1,			(1<<ISC20)						; falling edge спадающий фронт
+	sts		EICRA,			temp1
+
+EXT_INT2_out:
+	sts		flags1,			temp0
+	pop		temp4
+	pop		temp3
+	pop		temp2
+	pop		temp1
+	pop		temp0
+	out		SREG,			i_sreg
+	reti
+
+#endif
+
 ;*********************************************************************
 ;********* Подпрограммы инициализации переферии *******
 ;*********************************************************************
@@ -196,6 +294,20 @@ PORT_init:
 	sbi		PORT_LIN,		LIN_TX
 	sbi		PORT_LIN,		LIN_RX
 	ret
+
+#ifdef	slave_lin
+EXT_init:
+	ldi 	temp0,			(1<<ISC21)						; falling edge спадающий фронт
+	sts		EICRA,			temp0
+
+	ser		temp0
+	out		EIFR,			temp0
+
+	ldi		temp0,			(1<<INT2)
+	out		EIMSK,			temp0
+
+	ret
+#endif
 
 TIM0_init:
 ;	ldi		temp0,			(1<<CS02)|(1<<CS01)|(1<<CS00)
@@ -245,6 +357,14 @@ USART0_Transmit:
 	out		UDR0,			temp8
 	ret
 
+USART1_Transmit1:
+	lds		temp9,			UCSR1A
+	sbrs	temp9,			UDRE1
+	rjmp	USART1_Transmit1
+	sts		UDR1,			temp8
+
+#ifdef master_lin
+
 USART1_Transmit:
 	
 	lds		temp9,			UCSR1A
@@ -253,12 +373,6 @@ USART1_Transmit:
 ;	rcall	USART0_Transmit
 	ldi		temp9,			0x55
 	sts		UDR1,			temp9
-
-USART1_Transmit1:
-	lds		temp9,			UCSR1A
-	sbrs	temp9,			UDRE1
-	rjmp	USART1_Transmit1
-	sts		UDR1,			temp8
 
 USART1_Transmit2:
 	lds		temp0,			UCSR1A
@@ -388,6 +502,24 @@ Test_RXC1_flag:
 
 Test_RXC1_flag_out:
 	ret
+
+#elif	slave_lin
+
+Start_timer0:
+	ldi		temp0,			(1<<CS01)
+	out		TCCR0,			temp0
+	ret
+
+Test_Sync_break_rx:
+	lds		temp0,			flags1
+	sbrs	temp0,			Sync_break_rx_ok
+	rjmp	Test_Sync_break_rx_out
+	cbr		temp0,			(1<<Sync_break_rx_ok)
+
+
+Test_Sync_break_rx_out:
+	ret
+#endif
 ;*********************************************************************
 ;********* точка входа в программу *******
 ;*********************************************************************
@@ -416,6 +548,9 @@ SRAM_clr1:
 ;********* Инициализация переферии *******
 ;*********************************************************************
 	rcall	PORT_init
+#ifdef slave_lin
+	rcall	EXT_init
+#endif
 	rcall	TIM0_init
 	rcall	USART0_init
 	rcall	USART1_init
@@ -424,7 +559,7 @@ SRAM_clr1:
 
 ;	ldi		XL,				low (RXbufUS1)
 ;	ldi		XH,				high(RXbufUS1)
-;	ldi		temp0,			9	;9
+;	ldi		temp0,			9
 ;	
 ;	add		XL,				temp0
 ;	adc		XH,				zero
@@ -435,9 +570,16 @@ SRAM_clr1:
 ;********* Основной цикл *******
 ;*********************************************************************
 main:
+#ifdef master_lin
+
 	rcall	Test_reed_byte_usrt0
 	rcall	Time_synk_break
 	rcall	Test_synk_break_tx
 ;	rcall	Test_RXC1_flag
 	rcall	Test_RXbufUS1
+
+#elif slave_lin
+	rcall	Test_Sync_break_rx
+#endif
+
 	rjmp	main
