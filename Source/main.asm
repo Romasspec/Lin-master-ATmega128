@@ -20,12 +20,16 @@ Tout_timer_h:	.byte 1
 
 #elif	slave_lin
 flags1:			.byte 1
-	.equ		Sync_break_rx_ok 		= 0
+	.equ		Sync_break_rx_ok 		= 0			; 1 - Принят отрицательный синхроимпульс
 	.equ		falling_edge			= 1			; 1 - falling edge, 0 - rising edge
+	.equ		Start_Ttimout			= 2			; 1 - старт таймера таймаута
 
-TCNT0_h:		.byte 1
-Synk_stime_l:	.byte 1
-Synk_stime_h:	.byte 1
+TCNT0_byte1:		.byte 1
+TCNT0_byte2:		.byte 1
+Synk_stime_l:		.byte 1							; время начала импульса синхронизации
+Synk_stime_h:		.byte 1
+Synk_stp_time_l:	.byte 1							; время окончания импульса синхронизации
+Synk_stp_time_h:	.byte 1							; и начала таймаута
 
 #endif
 
@@ -213,11 +217,16 @@ USART1_RXC_1:
 TIM0_OVF:
 	in		i_sreg,			SREG
 	push	temp0
+	push	temp1
 
-	lds		temp0,			TCNT0_h
-	inc		temp0
-	sts		TCNT0_h,		temp0
+	lds		temp0,			TCNT0_byte1						;	TCNT0_byte0 -> TCNT0
+	lds		temp1,			TCNT0_byte2
+	subi	temp0,			0xFF
+	sbci	temp1,			0xFF
+	sts		TCNT0_byte1,	temp0
+	sts		TCNT0_byte2,	temp1
 
+	pop		temp1
 	pop		temp0
 	out		SREG,			i_sreg
 	reti
@@ -238,8 +247,10 @@ EXT_INT2:
 	push	temp3
 	push	temp4
 
+led_meandr		temp0,	temp1
+
 	in		temp1,			TCNT0
-	lds		temp2,			TCNT0_h
+	lds		temp2,			TCNT0_byte1
 	lds		temp0,			flags1
 	sbrc	temp0,			falling_edge
 	rjmp	EXT_INT2_rising_edge
@@ -253,19 +264,22 @@ EXT_INT2:
 
 EXT_INT2_rising_edge:
 	cbr		temp0,			(1<<falling_edge)
+	sts		Synk_stp_time_l,	temp1
+	sts		Synk_stp_time_h,	temp2
 	lds		temp3,			Synk_stime_l
 	lds		temp4,			Synk_stime_h
 	sub		temp1,			temp3
 	sbc		temp2,			temp4
 
-	cpi		temp1,			low (Synk_time)
-	ldi		temp3,			high(Synk_time)
+	cpi		temp1,			low (Synk_time*2)				; *2 потому что таймер ситает 0,5 мкс/тик
+	ldi		temp3,			high(Synk_time*2)
 	cpc		temp2,			temp3
 	brlo	EXT_INT2_out1
+	in		temp3,			EIMSK
+	cbr		temp3,			(1<<INT2)						; выключить внешнее прерывание
+	out		EIMSK,			temp3
 	sbr		temp0,			(1<<Sync_break_rx_ok)
-	in		temp1,			EIMSK
-	cbr		temp1,			(1<<INT2)
-	out		EIMSK,			temp1
+;	LED_ON
 EXT_INT2_out1:
 	lds		temp1,			EICRA
 	cbr		temp1,			(1<<ISC20)						; falling edge спадающий фронт
@@ -289,6 +303,8 @@ EXT_INT2_out:
 PORT_init:
 	ldi		temp0,			(1<<LIN_Wake)|(1<<LED)
 	out		DDRP_LED,		temp0
+
+	cbr		temp0,			(1<<LED)
 	out		PORT_LED,		temp0
 
 	sbi		PORT_LIN,		LIN_TX
@@ -515,9 +531,44 @@ Test_Sync_break_rx:
 	sbrs	temp0,			Sync_break_rx_ok
 	rjmp	Test_Sync_break_rx_out
 	cbr		temp0,			(1<<Sync_break_rx_ok)
+	sbr		temp0,			(1<<Start_Ttimout)
 
+	lds		temp1,			UCSR1B
+	sbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)
+	sts		UCSR1B,			temp1
 
 Test_Sync_break_rx_out:
+	sts		flags1,			temp0
+	ret
+
+Test_Ttimout:
+	lds		temp0,			flags1
+	sbrs	temp0,			Start_Ttimout
+	rjmp	Test_Ttimout_out
+	in		temp3,			TCNT0
+	lds		temp4,			TCNT0_byte1
+	lds		temp1,			Synk_stp_time_l
+	lds		temp2,			Synk_stp_time_h
+	sub		temp3,			temp1
+	sbc		temp4,			temp2
+	cpi		temp3,			low	(Time_out_time*2)
+	ldi		temp1,			high(Time_out_time*2)
+	cpc		temp4,			temp1
+	brlo	Test_Ttimout_out
+
+	cbr		temp0,			(1<<Start_Ttimout)
+
+	lds		temp1,			UCSR1B
+	cbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)
+	sts		UCSR1B,			temp1
+
+	in		temp1,			EIMSK
+	sbr		temp1,			(1<<INT2)
+	out		EIMSK,			temp1
+;	LED_OFF
+
+Test_Ttimout_out:
+	sts		flags1,			temp0
 	ret
 #endif
 ;*********************************************************************
@@ -556,7 +607,7 @@ SRAM_clr1:
 	rcall	USART1_init
 	sei
 	rcall	Start_timer0
-
+	clr		temp0		
 ;	ldi		XL,				low (RXbufUS1)
 ;	ldi		XH,				high(RXbufUS1)
 ;	ldi		temp0,			9
@@ -580,6 +631,7 @@ main:
 
 #elif slave_lin
 	rcall	Test_Sync_break_rx
+	rcall	Test_Ttimout
 #endif
 
 	rjmp	main

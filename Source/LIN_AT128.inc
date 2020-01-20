@@ -33,9 +33,13 @@
 .equ USART0_BAUD	= 115200
 .equ USART1_BAUD	= 9600
 .equ RXbufUS1_size	= 20
+#ifdef	master_lin
 .equ Time_out_time	= 213			; мс
-.equ Synk_time		= 1200			; мс
+#elif	slave_lin
+.equ Time_out_time	= 10000			; мкс
+#endif
 
+.equ Synk_time		= 1200			; мкс
 
 .equ I_CH			= 0
 .equ U_CH			= 1
@@ -47,3 +51,18 @@
 .equ Ind_loop		= 500	; цикл индикации 500 мс
 .equ vtimer1		= 10	; цикл 10 мс
 .equ adc_counter	= 4
+
+.macro	led_on
+	sbi		PORT_LED,		LED
+.endmacro
+
+.macro	led_off
+	cbi		PORT_LED,		LED
+.endmacro
+
+.macro	led_meandr
+	in		@0,			PORT_LED
+	ldi		@1, 		(1<<LED)
+	eor		@0,			@1
+	out		PORT_LED,	@0
+.endmacro
