@@ -17,7 +17,8 @@
 .def temp9			= r25
 
 .equ LIN_Wake		= PC0
-.equ LED			= PC1
+.equ LED1			= PC1
+.equ LED2			= PC2
 
 .equ PORT_USART0	= PORTE
 .equ PORT_USART1	= PORTD
@@ -39,7 +40,7 @@
 .equ Time_out_time	= 10000			; ìêñ
 #endif
 
-.equ Synk_time		= 1200			; ìêñ
+.equ Synk_time		= 600			; ìêñ
 
 .equ I_CH			= 0
 .equ U_CH			= 1
@@ -53,16 +54,23 @@
 .equ adc_counter	= 4
 
 .macro	led_on
-	sbi		PORT_LED,		LED
+	sbi		PORT_LED,		@0
 .endmacro
 
 .macro	led_off
-	cbi		PORT_LED,		LED
+	cbi		PORT_LED,		@0
 .endmacro
 
 .macro	led_meandr
 	in		@0,			PORT_LED
 	ldi		@1, 		(1<<LED)
+	eor		@0,			@1
+	out		PORT_LED,	@0
+.endmacro
+
+.macro	pc0_meandr
+	in		@0,			PORT_LED
+	ldi		@1, 		(1<<LIN_Wake)
 	eor		@0,			@1
 	out		PORT_LED,	@0
 .endmacro
