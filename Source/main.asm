@@ -23,6 +23,14 @@ flags1:			.byte 1
 	.equ		Sync_break_rx_ok 		= 0			; 1 - Принят отрицательный синхроимпульс
 	.equ		falling_edge			= 1			; 1 - falling edge, 0 - rising edge
 	.equ		Start_Ttimout			= 2			; 1 - старт таймера таймаута
+	.equ		Syn0x55RX				= 3
+	.equ		CMD1RX					= 4
+	.equ		Response				= 5
+	.equ		start_byte1				= 6
+	.equ		start_byte2				= 7
+
+flags2:			.byte 1
+	.equ		Update_buf				= 0
 
 TCNT0_byte1:		.byte 1
 TCNT0_byte2:		.byte 1
@@ -30,7 +38,10 @@ Synk_stime_l:		.byte 1							; время начала импульса синхронизации
 Synk_stime_h:		.byte 1
 Synk_stp_time_l:	.byte 1							; время окончания импульса синхронизации
 Synk_stp_time_h:	.byte 1							; и начала таймаута
-
+RXbufUS1:			.byte bufUS1_size
+TXbufUS1:			.byte bufUS1_size
+RXbufsize:			.byte 1
+TXbufsize:			.byte 1
 #endif
 
 .cseg
@@ -232,12 +243,165 @@ TIM0_OVF:
 	reti
 
 USART0_RXC:
+	in		i_sreg,			SREG
+	push	temp0
+	push	temp1
+	push	temp2
+	push	temp3
+	push	XL
+	push	XH
 
+	lds		temp0,			flags1
+	in		temp1,			UDR0
+	sbrc	temp0,			start_byte1
+	rjmp	start_byte1_OK
+	ldi		temp2,			's'
+	cpse	temp1,			temp2
+	rjmp	start_byte1_NO
+	sbr		temp0,			(1<<start_byte1)
+	rjmp	USART0_RXC_out
+
+start_byte1_OK:
+	sbrc	temp0,			start_byte2
+	rjmp	start_byte2_OK
+	ldi		temp2,			't'
+	cpse	temp1,			temp2
+	rjmp	start_byte2_NO
+	sbr		temp0,			(1<<start_byte2)
+	sts		RXbufsize,		zero
+	rjmp	USART0_RXC_out
+
+start_byte2_OK:
+	lds		temp2,			RXbufsize
+	ldi		XL,				low (RXbufUS1)
+	ldi		XH,				high(RXbufUS1)
+	add		XL,				temp2
+	adc		XH,				zero
+	inc		temp2
+	sts		RXbufsize,		temp2
+	st		X,				temp1
+	ldi		temp1,			4
+	cpse	temp2,			temp1
+	rjmp	USART0_RXC_out
+	clr		temp2
+	
+	ldi		XL,				low (RXbufUS1)
+	ldi		XH,				high(RXbufUS1)
+CRC:
+	ld		temp3,			X+
+	add		temp2,			temp3
+	brbc	SREG_C,			CRC1
+	inc		temp2
+CRC1:
+	dec		temp1
+	brne	CRC
+	com		temp2
+	st		X,				temp2
+	cbr		temp0,			(1<<start_byte1)|(1<<start_byte2)
+	lds		temp1,			flags2
+	sbr		temp1,			(1<<Update_buf)
+	sts		flags2,			temp1
+	rjmp	USART0_RXC_out
+
+start_byte2_NO:
+	cbr		temp0,			(1<<start_byte1)
+start_byte1_NO:
+
+
+USART0_RXC_out:
+	sts		flags1,			temp0
+	pop		XH
+	pop		XL
+	pop		temp3
+	pop		temp2
+	pop		temp1
+	pop		temp0
+	out		SREG,			i_sreg
 	reti
 
 USART1_RXC:
+	in		i_sreg,			SREG
+	push	temp0
+	push	temp1
+	push	temp2
+
+	lds		temp0,			flags1
+	lds		temp1,			UDR1
+	sbrc	temp0,			Syn0x55RX
+	rjmp	Syn0x55RX_OK
+	ldi		temp2,			0x55
+	cpse	temp1,			temp2
+	rjmp	Syn0x55NO_EQ
+	sbr		temp0,			(1<<Syn0x55RX)
+	rjmp	USART1_RXC_out
+
+Syn0x55RX_OK:
+	sbrc	temp0,			CMD1RX
+	rjmp	CMD1RX_NO
+	ldi		temp2,			0x03
+	cpse	temp1,			temp2
+	rjmp	CMDRX_NO_EQ
+;	sbr		temp0,			(1<<CMD1RX)
+	cbr		temp0,			(1<<Syn0x55RX)
+	sbr		temp0,			(1<<Response)	
+
+	lds		temp1,			UCSR1B
+	sbr		temp1,			(1<<TXEN1)
+	cbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)
+	sts		UCSR1B,			temp1
+
+	rjmp	USART1_RXC_out
+
+CMD1RX_NO:
+
+CMDRX_NO_EQ:
+	cbr		temp0,			(1<<Syn0x55RX)
+	rjmp	USART1_RXC_out
+
+Syn0x55NO_EQ:
+
+USART1_RXC_out:
+	sts		flags1,			temp0
+	pop		temp2
+	pop		temp1
+	pop		temp0
+	out		SREG,			i_sreg
+	reti
+
+EXT_INT2q:
+	in		i_sreg,			SREG
+	push	temp0
+	push	temp1
+	push	temp2
+
+	lds		temp2,			TCNT0_byte1
+	in		temp1,			TCNT0
+	in		temp0,			TIFR
+	sbrs	temp0,			TOV0
+	rjmp	T0_NOVF1
+;	cpi		temp1,			255
+;	brne	T0_NOVF1
+	inc		temp2
+T0_NOVF1:
+	lds		temp0,			flags1
+	sbr		temp0,			(1<<Start_Ttimout)
+;	sbr		temp0,			(1<<Sync_break_rx_ok)
+	sts		flags1,			temp0
+;led_on
+	sts		Synk_stp_time_l,	temp1
+	sts		Synk_stp_time_h,	temp2
+
+	in		temp1,			EIMSK
+	cbr		temp1,			(1<<INT2)						; выключить внешнее прерывание
+	out		EIMSK,			temp1
+	
+	pop		temp2
+	pop		temp1
+	pop		temp0
+	out		SREG,			i_sreg
 
 	reti
+
 
 EXT_INT2:
 	in		i_sreg,			SREG
@@ -246,11 +410,15 @@ EXT_INT2:
 	push	temp2
 	push	temp3
 	push	temp4
+	
 
-led_meandr		temp0,	temp1
-
-	in		temp1,			TCNT0
 	lds		temp2,			TCNT0_byte1
+	in		temp1,			TCNT0
+	in		temp0,			TIFR
+	sbrs	temp0,			TOV0
+	rjmp	T0_NOVF
+	inc		temp2
+T0_NOVF:
 	lds		temp0,			flags1
 	sbrc	temp0,			falling_edge
 	rjmp	EXT_INT2_rising_edge
@@ -279,7 +447,7 @@ EXT_INT2_rising_edge:
 	cbr		temp3,			(1<<INT2)						; выключить внешнее прерывание
 	out		EIMSK,			temp3
 	sbr		temp0,			(1<<Sync_break_rx_ok)
-;	LED_ON
+
 EXT_INT2_out1:
 	lds		temp1,			EICRA
 	cbr		temp1,			(1<<ISC20)						; falling edge спадающий фронт
@@ -287,6 +455,10 @@ EXT_INT2_out1:
 
 EXT_INT2_out:
 	sts		flags1,			temp0
+	in		temp1,			EIFR
+	sbr		temp1,			(1<<INTF2)						; сброс флага внешнего прерывания
+	out		EIFR,			temp1
+
 	pop		temp4
 	pop		temp3
 	pop		temp2
@@ -309,6 +481,8 @@ PORT_init:
 
 	sbi		PORT_LIN,		LIN_TX
 	sbi		PORT_LIN,		LIN_RX
+
+	sbi		PORT_USART0,	US0_RX
 	ret
 
 #ifdef	slave_lin
@@ -378,6 +552,7 @@ USART1_Transmit1:
 	sbrs	temp9,			UDRE1
 	rjmp	USART1_Transmit1
 	sts		UDR1,			temp8
+	ret
 
 #ifdef master_lin
 
@@ -536,17 +711,27 @@ Test_Sync_break_rx:
 	lds		temp1,			UCSR1B
 	sbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)
 	sts		UCSR1B,			temp1
-
-Test_Sync_break_rx_out:
 	sts		flags1,			temp0
+	led_on
+Test_Sync_break_rx_out:
 	ret
 
 Test_Ttimout:
 	lds		temp0,			flags1
 	sbrs	temp0,			Start_Ttimout
 	rjmp	Test_Ttimout_out
-	in		temp3,			TCNT0
+
+	cli
 	lds		temp4,			TCNT0_byte1
+	in		temp3,			TCNT0
+	in		temp1,			TIFR
+	sbrs	temp1,			TOV0
+	rjmp	Test_Ttimout_T0_NOVF
+;	cpi		temp3,			255
+;	brne	Test_Ttimout_T0_NOVF
+	inc		temp4
+Test_Ttimout_T0_NOVF:
+	sei
 	lds		temp1,			Synk_stp_time_l
 	lds		temp2,			Synk_stp_time_h
 	sub		temp3,			temp1
@@ -556,19 +741,62 @@ Test_Ttimout:
 	cpc		temp4,			temp1
 	brlo	Test_Ttimout_out
 
-	cbr		temp0,			(1<<Start_Ttimout)
-
+	cbr		temp0,			(1<<Start_Ttimout)|(1<<Syn0x55RX)|(1<<Response)
+;rcall	USART0_Transmit
 	lds		temp1,			UCSR1B
-	cbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)
+	cbr		temp1,			(1<<RXCIE1)|(1<<RXEN1)|(1<<TXEN1)
 	sts		UCSR1B,			temp1
+	LED_OFF
+	sts		flags1,			temp0
 
 	in		temp1,			EIMSK
-	sbr		temp1,			(1<<INT2)
+	sbr		temp1,			(1<<INT2)						; Включить внешнее прерывание
 	out		EIMSK,			temp1
-;	LED_OFF
-
 Test_Ttimout_out:
+	ret
+
+Test_TX_response:
+	lds		temp0,			flags1
+	sbrs	temp0,			Response
+	rjmp	Test_TX_response_out
+	
+	
+	ldi		XL,				low (TXbufUS1)
+	ldi		XH,				high(TXbufUS1)
+
+	ldi		temp1,			5;				TXbufsize
+TX_response:
+	ld		temp8,			X+
+	rcall	USART1_Transmit1
+	dec		temp1
+	brne	TX_response
+	
+	cbr	temp0,				(1<<Response)
 	sts		flags1,			temp0
+
+Test_TX_response_out:
+	ret
+
+Test_Update_buf:
+	lds		temp0,			flags2
+	sbrs	temp0,			Update_buf
+	rjmp	Test_Update_buf_out
+	ldi		temp1,			5
+
+	ldi		XL,				low (TXbufUS1)
+	ldi		XH,				high(TXbufUS1)
+
+	ldi		YL,				low (RXbufUS1)
+	ldi		YH,				high(RXbufUS1)
+Update_buf1:
+	ld		temp2,			Y+
+	st		X+,				temp2
+	dec		temp1
+	brne	Update_buf1
+
+	cbr		temp0,			(1<<Update_buf)
+	sts		flags2,			temp0		
+Test_Update_buf_out:
 	ret
 #endif
 ;*********************************************************************
@@ -605,9 +833,16 @@ SRAM_clr1:
 	rcall	TIM0_init
 	rcall	USART0_init
 	rcall	USART1_init
-	sei
 	rcall	Start_timer0
-	clr		temp0		
+	sei
+;	lds		temp0,			flags1
+;	sbr		temp0,			(1<<Sync_break_rx_ok)
+;	sts		flags1,			temp0
+	
+;	lds		temp0,			flags1
+;	sbr		temp0,			(1<<Sync_break_rx_ok)
+;	sts		flags1,			temp0
+
 ;	ldi		XL,				low (RXbufUS1)
 ;	ldi		XH,				high(RXbufUS1)
 ;	ldi		temp0,			9
@@ -632,6 +867,8 @@ main:
 #elif slave_lin
 	rcall	Test_Sync_break_rx
 	rcall	Test_Ttimout
+	rcall	Test_TX_response
+	rcall	Test_Update_buf
 #endif
 
 	rjmp	main
